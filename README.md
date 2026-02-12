@@ -133,3 +133,44 @@ npm start
 ## License
 
 MIT
+
+## Deployment to Heroku
+
+### Prerequisites
+- Heroku CLI installed
+- GitHub account connected to Heroku
+
+### Steps
+
+1. **Create a Heroku app**
+   ```bash
+   heroku create your-app-name
+   ```
+
+2. **Deploy**
+   ```bash
+   git push heroku main
+   ```
+
+3. **Set up automatic data refresh** (optional)
+   - Go to your Heroku app dashboard
+   - Add the Heroku Scheduler add-on (free tier available)
+   - Create a new scheduled job:
+     - Command: `curl -X POST https://your-app-name.herokuapp.com/api/admin/regenerate-data -H "Authorization: Bearer YOUR_TOKEN"`
+     - Frequency: Daily (or as needed)
+   - Add environment variable `SCHEDULER_TOKEN` to your app config
+
+4. **View your app**
+   ```bash
+   heroku open
+   ```
+
+### Environment Variables (if using scheduler auth)
+```
+SCHEDULER_TOKEN=your-secret-token
+```
+
+### Data Updates
+- On deployment (Procfile `release` phase)
+- Daily via Heroku Scheduler (if configured)
+- Manually via `/api/admin/regenerate-data` endpoint
