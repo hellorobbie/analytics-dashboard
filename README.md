@@ -21,6 +21,7 @@ A data-driven conversion and analytics dashboard built with Next.js. Track user 
 ## Getting Started
 
 ### Prerequisites
+
 - Node.js 18+
 - npm or yarn
 
@@ -63,14 +64,17 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ## API Endpoints
 
 ### GET /api/events
+
 Fetch paginated events data
 
 **Query Parameters:**
+
 - `page` (number, default: 1)
 - `limit` (number, default: 50, max: 200)
 - `session_id` (string, optional) - Filter by session ID
 
 **Response:**
+
 ```json
 {
   "data": [...],
@@ -84,9 +88,11 @@ Fetch paginated events data
 ```
 
 ### GET /api/funnel
+
 Get funnel analysis data
 
 **Response:**
+
 ```json
 [
   {
@@ -102,6 +108,7 @@ Get funnel analysis data
 ## Event Types
 
 Events are categorized as:
+
 - `page_view` - User visited a page
 - `add_to_cart` - User added item to cart
 - `begin_checkout` - User started checkout
