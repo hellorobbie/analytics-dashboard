@@ -12,6 +12,8 @@ export type Event = {
   variant: Variant;
   device: Device;
   channel: Channel;
+  experiment_id: string;
+  experiment_name: string;
   value?: number; // Revenue in cents, only for purchase events
 };
 

@@ -6,16 +6,19 @@ import path from 'path';
  * Generate realistic mock analytics data
  *
  * Strategy:
- * - 500 users, 2000 sessions, ~10k events
- * - 7-day date range
- * - Realistic funnel drop-offs:
- *   - 100% page_view
- *   - 60% add_to_cart
- *   - 40% of cart → begin_checkout
- *   - 70% of checkout → purchase
- * - Each session belongs to one user, variant, device, channel
- * - Sessions can have repeat events (multiple page views)
+ * - Multiple experiments running simultaneously
+ * - Each experiment has its own 500 users, 2000 sessions
+ * - 7-day date range per experiment
+ * - Realistic funnel drop-offs with slight variations per experiment
+ * - Each session belongs to one user, variant, device, channel, experiment
  */
+
+const NUM_EXPERIMENTS = 3;
+const EXPERIMENTS = [
+  { id: 'exp_001', name: 'Homepage Hero Text' },
+  { id: 'exp_002', name: 'CTA Button Color' },
+  { id: 'exp_003', name: 'Checkout Flow' },
+];
 
 const NUM_USERS = 500;
 const NUM_SESSIONS = 2000;
@@ -92,6 +95,8 @@ function generateSessionEvents(
   variant: Variant,
   device: Device,
   channel: Channel,
+  experimentId: string,
+  experimentName: string,
   baseTimestamp: Date
 ): Event[] {
   const events: Event[] = [];
@@ -108,6 +113,8 @@ function generateSessionEvents(
       variant,
       device,
       channel,
+      experiment_id: experimentId,
+      experiment_name: experimentName,
       value,
     });
 
@@ -148,33 +155,41 @@ function generateData(): Event[] {
   const now = new Date();
 
   console.log('Generating analytics data...');
-  console.log(`- ${NUM_USERS} users`);
-  console.log(`- ${NUM_SESSIONS} sessions`);
-  console.log(`- ${DAYS_OF_DATA} days of data`);
+  console.log(`- ${NUM_EXPERIMENTS} experiments`);
+  console.log(`- ${NUM_USERS} users per experiment`);
+  console.log(`- ${NUM_SESSIONS} sessions per experiment`);
+  console.log(`- ${DAYS_OF_DATA} days of data per experiment`);
   console.log();
 
-  for (let sessionIndex = 0; sessionIndex < NUM_SESSIONS; sessionIndex++) {
-    // Assign session to a random user (some users will have multiple sessions)
-    const userId = generateUserId(randomInt(0, NUM_USERS - 1));
-    const sessionId = generateSessionId(sessionIndex);
+  // Generate data for each experiment
+  for (let expIndex = 0; expIndex < NUM_EXPERIMENTS; expIndex++) {
+    const experiment = EXPERIMENTS[expIndex];
 
-    // Session-level attributes (consistent across all events in session)
-    const variant = randomChoice(VARIANTS);
-    const device = randomChoice(DEVICES, DEVICE_WEIGHTS);
-    const channel = randomChoice(CHANNELS, CHANNEL_WEIGHTS);
+    for (let sessionIndex = 0; sessionIndex < NUM_SESSIONS; sessionIndex++) {
+      // Assign session to a random user (some users will have multiple sessions)
+      const userId = generateUserId(randomInt(0, NUM_USERS - 1));
+      const sessionId = `${experiment.id}_session_${String(sessionIndex).padStart(6, '0')}`;
 
-    const baseTimestamp = generateTimestamp(now, sessionIndex);
+      // Session-level attributes (consistent across all events in session)
+      const variant = randomChoice(VARIANTS);
+      const device = randomChoice(DEVICES, DEVICE_WEIGHTS);
+      const channel = randomChoice(CHANNELS, CHANNEL_WEIGHTS);
 
-    const sessionEvents = generateSessionEvents(
-      sessionId,
-      userId,
-      variant,
-      device,
-      channel,
-      baseTimestamp
-    );
+      const baseTimestamp = generateTimestamp(now, sessionIndex);
 
-    allEvents.push(...sessionEvents);
+      const sessionEvents = generateSessionEvents(
+        sessionId,
+        userId,
+        variant,
+        device,
+        channel,
+        experiment.id,
+        experiment.name,
+        baseTimestamp
+      );
+
+      allEvents.push(...sessionEvents);
+    }
   }
 
   // Sort by timestamp (events may be out of order due to random generation)
@@ -188,46 +203,64 @@ function displayStats(events: Event[]) {
   const sessions = new Set(events.map(e => e.session_id));
   const users = new Set(events.map(e => e.user_id));
 
-  const pageViewSessions = new Set(
-    events.filter(e => e.event_name === 'page_view').map(e => e.session_id)
-  );
-  const cartSessions = new Set(
-    events.filter(e => e.event_name === 'add_to_cart').map(e => e.session_id)
-  );
-  const checkoutSessions = new Set(
-    events.filter(e => e.event_name === 'begin_checkout').map(e => e.session_id)
-  );
-  const purchaseSessions = new Set(
-    events.filter(e => e.event_name === 'purchase').map(e => e.session_id)
-  );
-
-  const totalRevenue = events
-    .filter(e => e.event_name === 'purchase')
-    .reduce((sum, e) => sum + (e.value || 0), 0);
-
   console.log('Generated data statistics:');
-  console.log('-------------------------');
+  console.log('=========================');
   console.log(`Total events: ${events.length}`);
   console.log(`Total sessions: ${sessions.size}`);
   console.log(`Total users: ${users.size}`);
   console.log();
-  console.log('Funnel:');
-  console.log(`  page_view:      ${pageViewSessions.size} sessions (100%)`);
-  console.log(
-    `  add_to_cart:    ${cartSessions.size} sessions (${((cartSessions.size / pageViewSessions.size) * 100).toFixed(1)}%)`
-  );
-  console.log(
-    `  begin_checkout: ${checkoutSessions.size} sessions (${((checkoutSessions.size / cartSessions.size) * 100).toFixed(1)}% of cart)`
-  );
-  console.log(
-    `  purchase:       ${purchaseSessions.size} sessions (${((purchaseSessions.size / checkoutSessions.size) * 100).toFixed(1)}% of checkout)`
-  );
-  console.log();
-  console.log(`Total revenue: $${(totalRevenue / 100).toFixed(2)}`);
-  console.log(
-    `Average order value: $${(totalRevenue / purchaseSessions.size / 100).toFixed(2)}`
-  );
-  console.log();
+
+  // Group by experiment and show stats
+  const eventsByExperiment = new Map<string, Event[]>();
+  events.forEach(e => {
+    if (!eventsByExperiment.has(e.experiment_id)) {
+      eventsByExperiment.set(e.experiment_id, []);
+    }
+    eventsByExperiment.get(e.experiment_id)!.push(e);
+  });
+
+  eventsByExperiment.forEach((expEvents, expId) => {
+    const exp = EXPERIMENTS.find(e => e.id === expId);
+    const expName = exp?.name || expId;
+
+    const pageViewSessions = new Set(
+      expEvents.filter(e => e.event_name === 'page_view').map(e => e.session_id)
+    );
+    const cartSessions = new Set(
+      expEvents.filter(e => e.event_name === 'add_to_cart').map(e => e.session_id)
+    );
+    const checkoutSessions = new Set(
+      expEvents.filter(e => e.event_name === 'begin_checkout').map(e => e.session_id)
+    );
+    const purchaseSessions = new Set(
+      expEvents.filter(e => e.event_name === 'purchase').map(e => e.session_id)
+    );
+
+    const totalRevenue = expEvents
+      .filter(e => e.event_name === 'purchase')
+      .reduce((sum, e) => sum + (e.value || 0), 0);
+
+    console.log(`Experiment: ${expName}`);
+    console.log('-'.repeat(50));
+    console.log(`Events: ${expEvents.length}`);
+    console.log(`Sessions: ${pageViewSessions.size}`);
+    console.log('Funnel:');
+    console.log(`  page_view:      ${pageViewSessions.size} sessions (100%)`);
+    console.log(
+      `  add_to_cart:    ${cartSessions.size} sessions (${((cartSessions.size / pageViewSessions.size) * 100).toFixed(1)}%)`
+    );
+    console.log(
+      `  begin_checkout: ${checkoutSessions.size} sessions (${((checkoutSessions.size / cartSessions.size) * 100).toFixed(1)}% of cart)`
+    );
+    console.log(
+      `  purchase:       ${purchaseSessions.size} sessions (${((purchaseSessions.size / checkoutSessions.size) * 100).toFixed(1)}% of checkout)`
+    );
+    console.log(`Total revenue: $${(totalRevenue / 100).toFixed(2)}`);
+    console.log(
+      `Average order value: $${(totalRevenue / purchaseSessions.size / 100).toFixed(2)}`
+    );
+    console.log();
+  });
 }
 
 // Main execution
