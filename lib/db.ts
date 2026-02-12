@@ -25,6 +25,15 @@ export function loadEvents(): Event[] {
 }
 
 /**
+ * Clear the in-memory events cache.
+ * Call this after regenerating data so the next loadEvents()
+ * reads the fresh file from disk.
+ */
+export function clearCache(): void {
+  cachedEvents = null;
+}
+
+/**
  * Filter events by date range
  */
 export function filterEventsByDateRange(

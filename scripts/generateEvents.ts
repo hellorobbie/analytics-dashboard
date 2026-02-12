@@ -6,23 +6,57 @@ import path from 'path'
  * Generate realistic mock analytics data
  *
  * Strategy:
- * - Multiple experiments running simultaneously
+ * - Fetches LIVE experiments from the experiment manager (falls back to hardcoded list)
  * - Each experiment has its own 500 users, 2000 sessions
  * - 7-day date range per experiment
  * - Realistic funnel drop-offs with slight variations per experiment
  * - Each session belongs to one user, variant, device, channel, experiment
  */
 
-const NUM_EXPERIMENTS = 8
-const EXPERIMENTS = [
+const EXPERIMENT_MANAGER_URL = process.env.EXPERIMENT_MANAGER_URL
+const EXPERIMENT_MANAGER_API_KEY = process.env.EXPERIMENT_MANAGER_API_KEY
+
+// Type for what comes back from the experiment manager API
+interface RemoteExperiment {
+  id: string
+  name: string
+  status: string
+  hypothesis: string | null
+  primaryKPI: string | null
+  targeting: {
+    device?: string[]
+    country?: string[]
+    channel?: string[]
+    userType?: string[]
+    language?: string[]
+  }
+  variants: Array<{
+    id: string
+    name: string
+    trafficPercentage: number
+    isControl: boolean
+  }>
+  goLiveAt: string | null
+}
+
+// Internal format used by the generator
+interface GeneratorExperiment {
+  id: string
+  name: string
+  variantBModifier?: number
+  deviceWeights?: number[]
+  channelWeights?: number[]
+}
+
+const FALLBACK_EXPERIMENTS: GeneratorExperiment[] = [
   { id: 'exp_001', name: 'Homepage Hero Text' },
-  { id: 'exp_002', name: 'CTA Button Colour', variantBModifier: -0.15 }, // Variant B loses
-  { id: 'exp_003', name: 'Checkout Flow', variantBModifier: 0.25 }, // Variant B wins
+  { id: 'exp_002', name: 'CTA Button Colour', variantBModifier: -0.15 },
+  { id: 'exp_003', name: 'Checkout Flow', variantBModifier: 0.25 },
   { id: 'exp_004', name: 'Product Image Size' },
-  { id: 'exp_005', name: 'Discount Badge Position', variantBModifier: 0.1 }, // Variant B wins slightly
-  { id: 'exp_006', name: 'Mobile Navigation', variantBModifier: 0.05 }, // Variant B wins slightly
-  { id: 'exp_007', name: 'Email Follow-up Copy', variantBModifier: 0.08 }, // Variant B wins slightly
-  { id: 'exp_008', name: 'Order Confirmation Page', variantBModifier: 0.2 }, // Variant B wins
+  { id: 'exp_005', name: 'Discount Badge Position', variantBModifier: 0.1 },
+  { id: 'exp_006', name: 'Mobile Navigation', variantBModifier: 0.05 },
+  { id: 'exp_007', name: 'Email Follow-up Copy', variantBModifier: 0.08 },
+  { id: 'exp_008', name: 'Order Confirmation Page', variantBModifier: 0.2 },
 ]
 
 const NUM_USERS = 500
@@ -52,6 +86,145 @@ const CHANNEL_WEIGHTS = [0.3, 0.25, 0.2, 0.15, 0.1]
 const MIN_ORDER_VALUE = 2000 // $20
 const MAX_ORDER_VALUE = 30000 // $300
 
+// --- Experiment Manager Integration ---
+
+/**
+ * Derive a variantBModifier from the experiment name using a simple hash.
+ * Deterministic: same name always produces the same modifier.
+ * Range: [-0.20, +0.30] with slight positive bias.
+ */
+function deriveVariantBModifier(name: string): number {
+  let hash = 0
+  for (let i = 0; i < name.length; i++) {
+    const char = name.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash
+  }
+  const normalized = (Math.abs(hash) % 1000) / 1000
+  return -0.20 + (normalized * 0.50)
+}
+
+/**
+ * Derive device weights from targeting rules.
+ * Non-targeted devices get 0 weight; remaining weights are renormalized.
+ */
+function deriveDeviceWeights(targetDevices?: string[]): number[] {
+  const defaults = [0.6, 0.35, 0.05] // [mobile, desktop, tablet]
+
+  if (!targetDevices || targetDevices.length === 0) {
+    return defaults
+  }
+
+  const normalizedDevices = new Set<string>()
+  for (const d of targetDevices) {
+    const lower = d.toLowerCase()
+    if (lower === 'ios' || lower === 'android' || lower === 'mobile') {
+      normalizedDevices.add('mobile')
+    } else if (lower === 'desktop') {
+      normalizedDevices.add('desktop')
+    } else if (lower === 'tablet') {
+      normalizedDevices.add('tablet')
+    }
+  }
+
+  if (normalizedDevices.size === 3) return defaults
+
+  const dashboardDevices = ['mobile', 'desktop', 'tablet']
+  const weights = dashboardDevices.map((device, i) =>
+    normalizedDevices.has(device) ? defaults[i] : 0
+  )
+
+  const total = weights.reduce((sum, w) => sum + w, 0)
+  if (total === 0) return defaults
+  return weights.map(w => w / total)
+}
+
+/**
+ * Derive channel weights from targeting rules.
+ * Maps experiment manager channel names to dashboard channels.
+ */
+function deriveChannelWeights(targetChannels?: string[]): number[] {
+  const defaults = [0.3, 0.25, 0.2, 0.15, 0.1] // [organic, paid_search, social, email, direct]
+
+  if (!targetChannels || targetChannels.length === 0) {
+    return defaults
+  }
+
+  const channelMap: Record<string, number[]> = {
+    'web':         [0, 1, 4],
+    'organic':     [0],
+    'paid':        [1],
+    'paid_search': [1],
+    'social':      [2],
+    'email':       [3],
+    'direct':      [4],
+    'app':         [4],
+  }
+
+  const activeIndices = new Set<number>()
+  for (const ch of targetChannels) {
+    const indices = channelMap[ch.toLowerCase()]
+    if (indices) {
+      indices.forEach(i => activeIndices.add(i))
+    }
+  }
+
+  if (activeIndices.size === 0 || activeIndices.size === 5) return defaults
+
+  const weights = defaults.map((w, i) => activeIndices.has(i) ? w : 0)
+  const total = weights.reduce((sum, w) => sum + w, 0)
+  if (total === 0) return defaults
+  return weights.map(w => w / total)
+}
+
+function mapRemoteExperiment(remote: RemoteExperiment): GeneratorExperiment {
+  return {
+    id: `exp_${remote.id.substring(0, 8)}`,
+    name: remote.name,
+    variantBModifier: deriveVariantBModifier(remote.name),
+    deviceWeights: deriveDeviceWeights(remote.targeting.device),
+    channelWeights: deriveChannelWeights(remote.targeting.channel),
+  }
+}
+
+async function fetchLiveExperiments(): Promise<GeneratorExperiment[]> {
+  if (!EXPERIMENT_MANAGER_URL || !EXPERIMENT_MANAGER_API_KEY) {
+    console.log('No EXPERIMENT_MANAGER_URL or API key configured, using fallback experiments')
+    return FALLBACK_EXPERIMENTS
+  }
+
+  try {
+    const url = `${EXPERIMENT_MANAGER_URL}/api/integrations/experiments`
+    console.log(`Fetching live experiments from: ${url}`)
+
+    const response = await fetch(url, {
+      headers: { 'x-api-key': EXPERIMENT_MANAGER_API_KEY },
+    })
+
+    if (!response.ok) {
+      console.error(`Failed to fetch experiments: ${response.status} ${response.statusText}`)
+      return FALLBACK_EXPERIMENTS
+    }
+
+    const data = await response.json()
+    const remoteExperiments: RemoteExperiment[] = data.experiments
+
+    if (!remoteExperiments || remoteExperiments.length === 0) {
+      console.log('No live experiments found, using fallback experiments')
+      return FALLBACK_EXPERIMENTS
+    }
+
+    console.log(`Found ${remoteExperiments.length} live experiment(s) from experiment manager`)
+    return remoteExperiments.map(mapRemoteExperiment)
+  } catch (error) {
+    console.error('Error fetching experiments:', error)
+    console.log('Falling back to hardcoded experiments')
+    return FALLBACK_EXPERIMENTS
+  }
+}
+
+// --- Utility Functions ---
+
 function randomChoice<T>(items: T[], weights?: number[]): T {
   if (!weights) {
     return items[Math.floor(Math.random() * items.length)]
@@ -76,10 +249,6 @@ function randomInt(min: number, max: number): number {
 
 function generateUserId(index: number): string {
   return `user_${String(index).padStart(5, '0')}`
-}
-
-function generateSessionId(index: number): string {
-  return `session_${String(index).padStart(6, '0')}`
 }
 
 function generateEventId(): string {
@@ -179,30 +348,28 @@ function generateSessionEvents(
   return events
 }
 
-function generateData(): Event[] {
+// --- Main Generation ---
+
+async function generateData(): Promise<Event[]> {
+  const experiments = await fetchLiveExperiments()
   const allEvents: Event[] = []
   const now = new Date()
 
   console.log('Generating analytics data...')
-  console.log(`- ${NUM_EXPERIMENTS} experiments`)
+  console.log(`- ${experiments.length} experiments`)
   console.log(`- ${NUM_USERS} users per experiment`)
   console.log(`- ${NUM_SESSIONS} sessions per experiment`)
   console.log(`- ${DAYS_OF_DATA} days of data per experiment`)
   console.log()
 
-  // Generate data for each experiment
-  for (let expIndex = 0; expIndex < NUM_EXPERIMENTS; expIndex++) {
-    const experiment = EXPERIMENTS[expIndex]
-
+  for (const experiment of experiments) {
     for (let sessionIndex = 0; sessionIndex < NUM_SESSIONS; sessionIndex++) {
-      // Assign session to a random user (some users will have multiple sessions)
       const userId = generateUserId(randomInt(0, NUM_USERS - 1))
       const sessionId = `${experiment.id}_session_${String(sessionIndex).padStart(6, '0')}`
 
-      // Session-level attributes (consistent across all events in session)
       const variant = randomChoice(VARIANTS)
-      const device = randomChoice(DEVICES, DEVICE_WEIGHTS)
-      const channel = randomChoice(CHANNELS, CHANNEL_WEIGHTS)
+      const device = randomChoice(DEVICES, experiment.deviceWeights || DEVICE_WEIGHTS)
+      const channel = randomChoice(CHANNELS, experiment.channelWeights || CHANNEL_WEIGHTS)
 
       const baseTimestamp = generateTimestamp(now, sessionIndex)
 
@@ -214,7 +381,7 @@ function generateData(): Event[] {
         channel,
         experiment.id,
         experiment.name,
-        (experiment as any).variantBModifier,
+        experiment.variantBModifier,
         baseTimestamp,
       )
 
@@ -222,13 +389,10 @@ function generateData(): Event[] {
     }
   }
 
-  // Sort by timestamp (events may be out of order due to random generation)
   allEvents.sort((a, b) => a.timestamp.localeCompare(b.timestamp))
-
   return allEvents
 }
 
-// Calculate and display statistics
 function displayStats(events: Event[]) {
   const sessions = new Set(events.map((e) => e.session_id))
   const users = new Set(events.map((e) => e.user_id))
@@ -240,7 +404,6 @@ function displayStats(events: Event[]) {
   console.log(`Total users: ${users.size}`)
   console.log()
 
-  // Group by experiment and show stats
   const eventsByExperiment = new Map<string, Event[]>()
   events.forEach((e) => {
     if (!eventsByExperiment.has(e.experiment_id)) {
@@ -250,8 +413,7 @@ function displayStats(events: Event[]) {
   })
 
   eventsByExperiment.forEach((expEvents, expId) => {
-    const exp = EXPERIMENTS.find((e) => e.id === expId)
-    const expName = exp?.name || expId
+    const expName = expEvents[0]?.experiment_name || expId
 
     const pageViewSessions = new Set(
       expEvents
@@ -302,16 +464,22 @@ function displayStats(events: Event[]) {
 }
 
 // Main execution
-const events = generateData()
-displayStats(events)
+async function main() {
+  const events = await generateData()
+  displayStats(events)
 
-// Write to file
-const dataDir = path.join(process.cwd(), 'data')
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true })
+  const dataDir = path.join(process.cwd(), 'data')
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true })
+  }
+
+  const outputPath = path.join(dataDir, 'events.json')
+  fs.writeFileSync(outputPath, JSON.stringify(events, null, 2))
+
+  console.log(`Data written to: ${outputPath}`)
 }
 
-const outputPath = path.join(dataDir, 'events.json')
-fs.writeFileSync(outputPath, JSON.stringify(events, null, 2))
-
-console.log(`Data written to: ${outputPath}`)
+main().catch((error) => {
+  console.error('Fatal error during data generation:', error)
+  process.exit(1)
+})

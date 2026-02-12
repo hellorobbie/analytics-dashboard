@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { execSync } from 'child_process'
 import path from 'path'
+import { clearCache } from '@/lib/db'
 
 /**
  * POST /api/admin/regenerate-data
@@ -26,6 +27,9 @@ export async function POST(request: NextRequest) {
       stdio: 'inherit',
       cwd: process.cwd(),
     })
+
+    // Clear the in-memory cache so subsequent API requests use the new data
+    clearCache()
 
     console.log('Data regeneration completed successfully')
 
