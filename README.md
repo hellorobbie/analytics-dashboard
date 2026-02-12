@@ -137,17 +137,20 @@ MIT
 ## Deployment to Heroku
 
 ### Prerequisites
+
 - Heroku CLI installed
 - GitHub account connected to Heroku
 
 ### Steps
 
 1. **Create a Heroku app**
+
    ```bash
    heroku create your-app-name
    ```
 
 2. **Deploy**
+
    ```bash
    git push heroku main
    ```
@@ -166,11 +169,13 @@ MIT
    ```
 
 ### Environment Variables (if using scheduler auth)
+
 ```
 SCHEDULER_TOKEN=your-secret-token
 ```
 
 ### Data Updates
+
 - On deployment (Procfile `release` phase)
 - Daily via Heroku Scheduler (if configured)
 - Manually via `/api/admin/regenerate-data` endpoint

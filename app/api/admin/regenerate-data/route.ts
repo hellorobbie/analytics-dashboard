@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { execSync } from 'child_process';
-import path from 'path';
+import { NextRequest, NextResponse } from 'next/server'
+import { execSync } from 'child_process'
+import path from 'path'
 
 /**
  * POST /api/admin/regenerate-data
@@ -11,40 +11,37 @@ import path from 'path';
 export async function POST(request: NextRequest) {
   try {
     // Verify request is from Heroku (basic auth or IP check)
-    const authHeader = request.headers.get('authorization');
-    const schedulerToken = process.env.SCHEDULER_TOKEN;
+    const authHeader = request.headers.get('authorization')
+    const schedulerToken = process.env.SCHEDULER_TOKEN
 
     if (schedulerToken && authHeader !== `Bearer ${schedulerToken}`) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    console.log('Starting data regeneration...');
+    console.log('Starting data regeneration...')
 
     // Run the data generation script
-    const scriptPath = path.join(process.cwd(), 'scripts', 'generateEvents.ts');
+    const scriptPath = path.join(process.cwd(), 'scripts', 'generateEvents.ts')
     execSync(`npx tsx ${scriptPath}`, {
       stdio: 'inherit',
       cwd: process.cwd(),
-    });
+    })
 
-    console.log('Data regeneration completed successfully');
+    console.log('Data regeneration completed successfully')
 
     return NextResponse.json({
       success: true,
       message: 'Data regenerated successfully',
       timestamp: new Date().toISOString(),
-    });
+    })
   } catch (error) {
-    console.error('Error regenerating data:', error);
+    console.error('Error regenerating data:', error)
     return NextResponse.json(
       {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error',
       },
-      { status: 500 }
-    );
+      { status: 500 },
+    )
   }
 }

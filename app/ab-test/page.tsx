@@ -287,7 +287,7 @@ export default function ABTestPage() {
                         {experiment.results.map((result, idx) => {
                           const isWinning =
                             (lift > 0 && result.variant === 'B') ||
-                            (lift < 0 && result.variant === 'A');
+                            (lift < 0 && result.variant === 'A')
                           return (
                             <tr
                               key={idx}
