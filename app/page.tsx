@@ -48,9 +48,12 @@ export default function OverviewPage() {
   const [endDate, setEndDate] = useState('')
   const [device, setDevice] = useState('')
   const [channel, setChannel] = useState('')
+  const [today, setToday] = useState('')
 
-  // Get today's date in YYYY-MM-DD format to prevent future dates
-  const today = new Date().toISOString().split('T')[0]
+  // Set today's date on the client to avoid stale static pre-render values
+  useEffect(() => {
+    setToday(new Date().toISOString().split('T')[0])
+  }, [])
 
   const fetchData = async () => {
     try {
